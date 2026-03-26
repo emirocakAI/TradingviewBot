@@ -2,6 +2,11 @@ import streamlit as st
 import asyncio
 import os
 import re
+import os
+
+# Playwright tarayıcılarını otomatik yükle
+os.system("playwright install chromium")
+
 from playwright.async_api import async_playwright
 from PIL import Image, ImageDraw, ImageFont
 
