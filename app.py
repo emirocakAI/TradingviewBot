@@ -1,99 +1,152 @@
-import os
-import asyncio
 import streamlit as st
-from playwright.async_api import async_playwright
-import requests
-from io import BytesIO
+import asyncio
+import os
 import re
+from playwright.async_api import async_playwright
+from PIL import Image, ImageDraw, ImageFont
 
 # --- 1. SİSTEM HAZIRLIĞI ---
+# Bulut sunucuda Playwright'ın çalışması için kurulumu zorla
 if not os.path.exists("/home/appuser/.cache/ms-playwright"):
     os.system("playwright install chromium")
 
-# --- 2. ESKİ USUL SNAPSHOT YAKALAMA (COLAB MANTIĞI) ---
-async def get_tv_snapshot(ticker, period_label, theme):
+# --- 2. ASIL PLAYWRIGHT MANTIĞI ---
+async def fetch_tradingview_report(symbol, timeframe_text, is_dark):
+    tf_map = {
+        "1 gün": {"query": "1 day", "url": "1D"},
+        "5 gün": {"query": "5 days", "url": "5D"},
+        "1 ay": {"query": "1 month", "url": "1M"},
+        "6 ay": {"query": "6 months", "url": "6M"},
+        "YTD": {"query": "Year to date", "url": "YTD"},
+        "1 yıl": {"query": "1 year", "url": "1Y"},
+        "5 yıl": {"query": "5 years", "url": "5Y"},
+        "Tümü": {"query": "All", "url": "ALL"}
+    }
+    selected_tf = tf_map.get(timeframe_text)
+    ticker = symbol.upper().replace("BIST:", "")
+
     async with async_playwright() as p:
-        # Tarayıcıyı kullanıcı gibi gösteriyoruz
+        # Bot korumasını aşmak için user_agent şart
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
         
-        # Sayfaya git
-        url = f"https://www.tradingview.com/symbols/BIST-{ticker}/"
+        # 1. Sayfaya Git
+        url = f"https://www.tradingview.com/symbols/BIST-{ticker}/?timeframe={selected_tf['url']}"
         await page.goto(url, wait_until="domcontentloaded")
-        
-        # Grafik ve butonların yüklenmesi için güvenli bekleme
-        await asyncio.sleep(8)
-        
-        try:
-            # Dark Mode: Eğer seçiliyse sayfaya direkt karanlık tema class'ını bas
-            if theme == "Dark Mod":
-                await page.evaluate("document.documentElement.classList.add('theme-dark')")
+        await asyncio.sleep(7) # Grafiğin oturması için süre
+
+        # 2. Dark Mode Ayarı (Senin o meşhur 3 tık metodu)
+        if is_dark:
+            try:
+                await page.get_by_role("button", name="Open user menu").click()
                 await asyncio.sleep(1)
+                # Playwright bazen label'ı bulamazsa diye force=True
+                await page.locator("label").filter(has_text="Dark theme").click(force=True)
+                await page.evaluate("document.documentElement.classList.add('theme-dark')")
+                await page.keyboard.press("Escape")
+            except: pass
 
-            # Periyot Seçimi (1 Ay, 6 Ay vb.)
-            period_btn = page.get_by_role("button", name=re.compile(period_label, re.IGNORECASE))
-            await period_btn.click()
-            await asyncio.sleep(2)
+        # 3. Verileri Çek
+        try:
+            full_name = await page.locator("h1").first.inner_text()
+            full_name = full_name.split("Grafiği")[0].strip()
+            
+            # Zaman periyodu butonundaki yüzdeyi yakala
+            target_button = page.get_by_role("button", name=re.compile(selected_tf['query'], re.IGNORECASE))
+            btn_text = await target_button.inner_text()
+            return_rate = re.search(r"[-+]?\d*[.,]\d+%", btn_text).group() if "%" in btn_text else "0.00%"
+        except:
+            full_name, return_rate = ticker, "N/A"
 
-            # --- NOKTA ATIŞI: KAMERA BUTONU ---
-            # Hatayı önlemek için butonun görünür olmasını bekliyoruz
-            camera_selector = "[data-name='take-a-snapshot']"
-            await page.wait_for_selector(camera_selector, timeout=15000)
+        # 4. KAMERA BUTONU VE İNDİRME (Nokta Atışı)
+        try:
+            # Önce snapshot menüsünü aç
+            await page.get_by_role("button", name="Take a snapshot").click()
+            await asyncio.sleep(1)
             
-            # Yeni sekme açılmasını bekleyen context
-            async with page.expect_popup() as popup_info:
-                await page.click(camera_selector)
+            # Download image satırına tıkla ve indirilen dosyayı yakala
+            async with page.expect_download() as download_info:
+                await page.get_by_role("row", name="Download image").click()
             
-            # Açılan yeni sekme (Snapshot URL)
-            snapshot_page = popup_info.value
-            await snapshot_page.wait_for_load_state("networkidle")
-            
-            # Bu sayfadaki saf resmi (img) çekiyoruz
-            # Bu, TradingView'ın bize sunduğu en temiz, reklamsız grafiktir.
-            img_element = snapshot_page.locator("img")
-            img_bytes = await img_element.screenshot()
-            
-            await browser.close()
-            return img_bytes
-
+            download = await download_info.value
+            temp_path = f"temp_{ticker}.png"
+            await download.save_as(temp_path)
         except Exception as e:
-            # Hata durumunda en azından ekranın grafik kısmını kurtar
-            st.error(f"Snapshot alınırken hata oluştu: {e}")
-            img_bytes = await page.screenshot(clip={'x': 0, 'y': 150, 'width': 1200, 'height': 600})
-            await browser.close()
-            return img_bytes
+            # Eğer kamera butonu patlarsa (ki bazen saklanır), ekranı manuel kırp
+            temp_path = f"temp_{ticker}.png"
+            await page.screenshot(path=temp_path, clip={'x': 300, 'y': 200, 'width': 1200, 'height': 600})
 
-# --- 3. STREAMLIT ARAYÜZÜ ---
-st.set_page_config(page_title="TV Snapshot Bot", layout="wide")
-st.title("📈 TradingView Temiz Grafik Yakalayıcı")
+        await browser.close()
+        return temp_path, {"name": full_name, "ticker": ticker, "range": timeframe_text, "return": return_rate, "dark": is_dark}
+
+# --- 3. GÖRSEL İŞLEME ---
+def finalize_image(path, data):
+    img = Image.open(path).convert("RGB")
+    w, h = img.size
+    
+    # Alt ve üstteki gereksiz TV boşluklarını temizle
+    img = img.crop((0, 20, w, h - 40)) 
+    
+    header_h = 140
+    bg_color = (19, 23, 34) if data['dark'] else (255, 255, 255) # TV Dark Mode Arkaplanı
+    new_img = Image.new('RGB', (w, img.height + header_h), color=bg_color)
+    new_img.paste(img, (0, header_h))
+    
+    draw = ImageDraw.Draw(new_img)
+    
+    # Renkler
+    txt_color = (255, 255, 255) if data['dark'] else (0, 0, 0)
+    is_neg = "-" in data['return'] or "−" in data['return']
+    accent = (255, 82, 82) if is_neg else (38, 166, 154)
+
+    # Not: Font dosyası klasöründe değilse default fonta düşer
+    try:
+        f_main = ImageFont.truetype("Outfit-VariableFont_wght.ttf", 40)
+        f_sub = ImageFont.truetype("Outfit-VariableFont_wght.ttf", 25)
+    except:
+        f_main = f_sub = ImageFont.load_default()
+
+    draw.text((40, 30), data['name'].upper(), fill=txt_color, font=f_main)
+    draw.text((40, 85), f"{data['ticker']} • {data['range']}", fill=(130, 130, 130), font=f_sub)
+    draw.text((w - 220, 45), data['return'], fill=accent, font=f_main)
+    
+    final_path = f"Final_{data['ticker']}.png"
+    new_img.save(final_path, quality=95)
+    return final_path
+
+# --- 4. STREAMLIT UI ---
+st.set_page_config(page_title="FinansZone Rapor", layout="centered")
+
+st.title("📈 Profesyonel Grafik Raporu")
+st.write("Colab Kararlılığında, TradingView Snapshot Altyapısı.")
 
 with st.sidebar:
-    ticker = st.text_input("Hisse Kodu (BIST):", value="THYAO").upper()
-    period = st.selectbox("Periyot:", ["1 day", "5 days", "1 month", "6 months", "Year to date", "1 year", "All time"])
-    theme = st.radio("Tema:", ["Beyaz Mod", "Dark Mod"])
-    run_btn = st.button("🚀 Grafiği Getir")
+    st.header("⚙️ Ayarlar")
+    symbol = st.text_input("Hisse Sembolü", value="THYAO")
+    timeframe = st.selectbox("Zaman Aralığı", ["1 gün", "5 gün", "1 ay", "6 ay", "YTD", "1 yıl", "5 yıl", "Tümü"])
+    theme = st.radio("Tema", ["Aydınlık", "Karanlık"])
+    dark_mode = theme == "Karanlık"
 
-if run_btn:
-    with st.spinner("Kamera butonuna gidiliyor, temiz grafik alınıyor..."):
+if st.button("🚀 Raporu Oluştur"):
+    with st.spinner("TradingView'dan görsel indiriliyor ve işleniyor..."):
         try:
-            image_data = asyncio.run(get_tv_snapshot(ticker, period, theme))
+            # Streamlit içinde asenkron fonksiyona giriş
+            raw_path, info = asyncio.run(fetch_tradingview_report(symbol, timeframe, dark_mode))
+            final_report = finalize_image(raw_path, info)
             
-            # Sonucu ekrana bas
-            st.image(image_data, caption=f"{ticker} - {period} ({theme})", use_column_width=True)
+            st.success("✅ Rapor Hazır!")
+            st.image(final_report)
             
-            # İndirme butonu
-            st.download_button(
-                label="📥 Grafiği Bilgisayara Kaydet",
-                data=image_data,
-                file_name=f"{ticker}_{period}.png",
-                mime="image/png"
-            )
+            with open(final_report, "rb") as file:
+                st.download_button("📥 Görseli İndir", file, f"{symbol}_Rapor.png", "image/png")
+            
+            # Geçici dosyaları temizle
+            if os.path.exists(raw_path): os.remove(raw_path)
         except Exception as e:
-            st.error(f"Bir şeyler ters gitti: {e}")
+            st.error(f"Hata oluştu: {e}")
 
-st.divider()
-st.info("Bu sürüm, font eklemesi yapılmamış, doğrudan 'Kamera' linkinden çekim yapan en stabil versiyondur.")
+st.caption("Veriler doğrudan TradingView 'Download Image' fonksiyonu ile çekilmektedir.")
