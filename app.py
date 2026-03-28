@@ -6,9 +6,30 @@ from datetime import datetime
 from playwright.async_api import async_playwright
 from PIL import Image, ImageDraw, ImageFont
 
-# --- 1. SİSTEM HAZIRLIĞI ---
+# --- 1. SİSTEM VE SAYAÇ HAZIRLIĞI ---
 if not os.path.exists("/home/appuser/.cache/ms-playwright"):
     os.system("playwright install chromium")
+
+# Kalıcı sayaç için dosya kontrolü
+COUNTER_FILE = "counter.txt"
+
+def get_total_count():
+    if not os.path.exists(COUNTER_FILE):
+        with open(COUNTER_FILE, "w") as f:
+            f.write("0")
+        return 0
+    with open(COUNTER_FILE, "r") as f:
+        try:
+            return int(f.read().strip())
+        except:
+            return 0
+
+def increment_total_count():
+    current = get_total_count()
+    new_count = current + 1
+    with open(COUNTER_FILE, "w") as f:
+        f.write(str(new_count))
+    return new_count
 
 # --- 2. ASIL PLAYWRIGHT MANTIĞI ---
 async def fetch_tradingview_report(symbol, timeframe_text, is_dark):
@@ -61,29 +82,27 @@ async def fetch_tradingview_report(symbol, timeframe_text, is_dark):
             async with page.expect_download() as download_info:
                 await page.get_by_role("row", name="Download image").click()
             download = await download_info.value
-            temp_path = f"temp_{ticker}.png"
+            timestamp = datetime.now().strftime("%H%M%S")
+            temp_path = f"temp_{ticker}_{timestamp}.png"
             await download.save_as(temp_path)
         except:
-            temp_path = f"temp_{ticker}.png"
+            timestamp = datetime.now().strftime("%H%M%S")
+            temp_path = f"temp_{ticker}_{timestamp}.png"
             await page.screenshot(path=temp_path, clip={'x': 300, 'y': 200, 'width': 1200, 'height': 600})
 
         await browser.close()
         return temp_path, {"name": full_name, "ticker": ticker, "range": timeframe_text, "return": return_rate, "dark": is_dark}
 
-# --- 3. GÖRSEL İŞLEME (ALT-ÜST UZATMA VE LOGO KONTROLÜ) ---
+# --- 3. GÖRSEL İŞLEME ---
 def finalize_image(path, data, show_logo):
     img = Image.open(path).convert("RGB")
     w, h = img.size
-    
-    # TV kenarlıklarını temizle
     img = img.crop((0, 20, w, h - 40)) 
     
     header_h = 160 
-    footer_h = 100 if show_logo else 40 # Logo varsa footer'ı büyütüyoruz
+    footer_h = 100 if show_logo else 40 
     
     bg_color = (19, 23, 34) if data['dark'] else (255, 255, 255)
-    
-    # Yeni imaj oluştur: Üstte header, ortada grafik, altta footer boşluğu
     new_img = Image.new('RGB', (w, img.height + header_h + footer_h), color=bg_color)
     new_img.paste(img, (0, header_h))
     
@@ -101,7 +120,6 @@ def finalize_image(path, data, show_logo):
     except:
         f_main = f_sub = ImageFont.load_default()
 
-    # ÜST KISIM (Header)
     draw.text((45, 35), data['name'].upper(), fill=txt_color, font=f_main)
     draw.text((45, 105), f"{data['ticker']}  |  {data['range']}", fill=sub_txt_color, font=f_sub)
     
@@ -109,33 +127,30 @@ def finalize_image(path, data, show_logo):
     return_w = bbox[2] - bbox[0]
     draw.text((w - return_w - 45, 35), raw_ret, fill=accent, font=f_main, stroke_width=1, stroke_fill=accent)
     
-    # --- ALT KISIM (Footer) VE LOGO EKLEME ---
     if show_logo:
         try:
             logo = Image.open("finanszone 1.png").convert("RGBA")
-            # Logoyu footer'a sığacak şekilde küçült (70px yükseklik)
-            base_h = 150
+            base_h = 150 
             w_percent = (base_h / float(logo.size[1]))
             base_w = int((float(logo.size[0]) * float(w_percent)))
             logo = logo.resize((base_w, base_h), Image.LANCZOS)
-            
-            # Logoyu SAĞ ALT köşeye yapıştır
             logo_x = w - logo.width - 45
             logo_y = new_img.height - logo.height - 15
             new_img.paste(logo, (logo_x, logo_y), logo)
         except:
-            pass # Logo dosyası yoksa sessizce devam et
+            pass 
 
-    final_path = f"Final_{data['ticker']}.png"
+    final_path = f"Final_{data['ticker']}_{datetime.now().strftime('%H%M%S')}.png"
     new_img.save(final_path, quality=100)
     return final_path
 
 # --- 4. STREAMLIT UI ---
 st.set_page_config(page_title="FinansZone Rapor", layout="centered")
 
-st.title("📈 FinansZone Rapor Oluşturucu")
+if "report_history" not in st.session_state:
+    st.session_state.report_history = []
 
-today_str = datetime.now().strftime("%Y-%m-%d")
+st.title("📈 FinansZone Rapor Akışı")
 
 with st.sidebar:
     st.header("⚙️ Hisse Seç")
@@ -145,33 +160,51 @@ with st.sidebar:
     dark_mode = theme == "Karanlık"
     
     st.markdown("---")
-    # LOGO SEÇENEĞİ BURADA
     show_logo = st.checkbox("Görselde Logo Olsun", value=True)
     
+    if st.button("🗑️ Geçmişi Temizle"):
+        st.session_state.report_history = []
+        st.rerun()
+
     st.markdown("---")
+    # SAYAÇ BURADA
+    total_count = get_total_count()
+    st.write(f"📊 Şimdiye kadar **{total_count}** hisse grafiği oluşturuldu.")
+    
     st.markdown("### Made with <3 by Emir")
 
 if st.button("🚀 Raporu Hazırla"):
-    with st.spinner("İşlem yapılıyor, lütfen bekleyin..."):
+    with st.spinner(f"{symbol} raporu hazırlanıyor..."):
         try:
             raw_path, info = asyncio.run(fetch_tradingview_report(symbol, timeframe, dark_mode))
-            # show_logo bilgisini finalize_image'a gönderiyoruz
             final_report = finalize_image(raw_path, info, show_logo)
             
-            st.success(f"✅ {symbol} Raporu Hazır!")
-            st.image(final_report)
+            # Sayaç artır
+            increment_total_count()
             
-            with open(final_report, "rb") as file:
-                st.download_button(
-                    label="📥 Görseli İndir", 
-                    data=file, 
-                    file_name=f"{symbol}_Rapor_{today_str}.png", 
-                    mime="image/png"
-                )
+            st.session_state.report_history.insert(0, {
+                "path": final_report,
+                "ticker": symbol,
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
             
             if os.path.exists(raw_path): os.remove(raw_path)
+            st.rerun() # Sayacı güncellemek için sayfayı yenile
+            
         except Exception as e:
             st.error(f"Hata oluştu: {e}")
 
 st.divider()
-st.caption(f"FinansZone • {today_str}")
+for report in st.session_state.report_history:
+    with st.container():
+        st.subheader(f"📊 {report['ticker']} - {report['date']}")
+        st.image(report['path'])
+        with open(report['path'], "rb") as file:
+            st.download_button(
+                label=f"📥 {report['ticker']} İndir", 
+                data=file, 
+                file_name=f"{report['ticker']}_Rapor.png", 
+                mime="image/png",
+                key=report['path']
+            )
+        st.divider()
