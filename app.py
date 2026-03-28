@@ -70,15 +70,21 @@ async def fetch_tradingview_report(symbol, timeframe_text, is_dark):
         await browser.close()
         return temp_path, {"name": full_name, "ticker": ticker, "range": timeframe_text, "return": return_rate, "dark": is_dark}
 
-# --- 3. GÖRSEL İŞLEME ---
-def finalize_image(path, data):
+# --- 3. GÖRSEL İŞLEME (ALT-ÜST UZATMA VE LOGO KONTROLÜ) ---
+def finalize_image(path, data, show_logo):
     img = Image.open(path).convert("RGB")
     w, h = img.size
+    
+    # TV kenarlıklarını temizle
     img = img.crop((0, 20, w, h - 40)) 
     
     header_h = 160 
+    footer_h = 100 if show_logo else 40 # Logo varsa footer'ı büyütüyoruz
+    
     bg_color = (19, 23, 34) if data['dark'] else (255, 255, 255)
-    new_img = Image.new('RGB', (w, img.height + header_h), color=bg_color)
+    
+    # Yeni imaj oluştur: Üstte header, ortada grafik, altta footer boşluğu
+    new_img = Image.new('RGB', (w, img.height + header_h + footer_h), color=bg_color)
     new_img.paste(img, (0, header_h))
     
     draw = ImageDraw.Draw(new_img)
@@ -95,6 +101,7 @@ def finalize_image(path, data):
     except:
         f_main = f_sub = ImageFont.load_default()
 
+    # ÜST KISIM (Header)
     draw.text((45, 35), data['name'].upper(), fill=txt_color, font=f_main)
     draw.text((45, 105), f"{data['ticker']}  |  {data['range']}", fill=sub_txt_color, font=f_sub)
     
@@ -102,6 +109,23 @@ def finalize_image(path, data):
     return_w = bbox[2] - bbox[0]
     draw.text((w - return_w - 45, 35), raw_ret, fill=accent, font=f_main, stroke_width=1, stroke_fill=accent)
     
+    # --- ALT KISIM (Footer) VE LOGO EKLEME ---
+    if show_logo:
+        try:
+            logo = Image.open("finanszone 1.png").convert("RGBA")
+            # Logoyu footer'a sığacak şekilde küçült (70px yükseklik)
+            base_h = 70 
+            w_percent = (base_h / float(logo.size[1]))
+            base_w = int((float(logo.size[0]) * float(w_percent)))
+            logo = logo.resize((base_w, base_h), Image.LANCZOS)
+            
+            # Logoyu SAĞ ALT köşeye yapıştır
+            logo_x = w - logo.width - 45
+            logo_y = new_img.height - logo.height - 15
+            new_img.paste(logo, (logo_x, logo_y), logo)
+        except:
+            pass # Logo dosyası yoksa sessizce devam et
+
     final_path = f"Final_{data['ticker']}.png"
     new_img.save(final_path, quality=100)
     return final_path
@@ -109,9 +133,8 @@ def finalize_image(path, data):
 # --- 4. STREAMLIT UI ---
 st.set_page_config(page_title="FinansZone Rapor", layout="centered")
 
-st.title("📈 Hisse Grafik oluşturucu")
+st.title("📈 FinansZone Rapor Oluşturucu")
 
-# Bugünün tarihini formatla (Görsel adı için)
 today_str = datetime.now().strftime("%Y-%m-%d")
 
 with st.sidebar:
@@ -122,19 +145,23 @@ with st.sidebar:
     dark_mode = theme == "Karanlık"
     
     st.markdown("---")
+    # LOGO SEÇENEĞİ BURADA
+    show_logo = st.checkbox("Görselde Logo Olsun", value=True)
+    
+    st.markdown("---")
     st.markdown("### Made with <3 by Emir")
 
 if st.button("🚀 Raporu Hazırla"):
     with st.spinner("İşlem yapılıyor, lütfen bekleyin..."):
         try:
             raw_path, info = asyncio.run(fetch_tradingview_report(symbol, timeframe, dark_mode))
-            final_report = finalize_image(raw_path, info)
+            # show_logo bilgisini finalize_image'a gönderiyoruz
+            final_report = finalize_image(raw_path, info, show_logo)
             
             st.success(f"✅ {symbol} Raporu Hazır!")
             st.image(final_report)
             
             with open(final_report, "rb") as file:
-                # Dosya adına tarih eklendi
                 st.download_button(
                     label="📥 Görseli İndir", 
                     data=file, 
