@@ -114,7 +114,7 @@ def finalize_image(path, data, show_logo):
         try:
             logo = Image.open("finanszone 1.png").convert("RGBA")
             # Logoyu footer'a sığacak şekilde küçült (70px yükseklik)
-            base_h = 70 
+            base_h = 150
             w_percent = (base_h / float(logo.size[1]))
             base_w = int((float(logo.size[0]) * float(w_percent)))
             logo = logo.resize((base_w, base_h), Image.LANCZOS)
