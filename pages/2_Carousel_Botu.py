@@ -2,80 +2,127 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
-from PIL import Image
-import time
+from PIL import Image, ImageDraw, ImageFont
+import io
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(page_title="FinansZone Bot", layout="wide")
+# --- 1. AYARLAR & EVDS FONKSİYONU ---
+EVDS_KEY = "8nTja3zQFQ"
+FONT_PATH = "Outfit-VariableFont_wght.ttf" # Font dosyasının konumundan emin ol
+LOGO_PATH = "finanszone 1.png"
+W, H = 1080, 1080
 
-# --- LAZY IMPORT & DATA FUNCTION ---
-@st.cache_data(ttl=3600)  # Verileri 1 saat önbelleğe alır, hızı artırır
-def get_evds_indicators(api_key):
+@st.cache_data(ttl=3600)
+def get_pro_metrics():
     try:
-        # Kütüphaneyi burada içe aktararak açılış çakışmasını önlüyoruz
         from evds import evdsAPI
-        evds = evdsAPI(api_key)
-        
-        # Tarih aralığını geniş tutuyoruz (Hafta sonu boşluğunu aşmak için)
+        evds = evdsAPI(EVDS_KEY)
         end_date = datetime.now().strftime('%d-%m-%Y')
-        start_date = (datetime.now() - timedelta(days=20)).strftime('%d-%m-%Y')
+        start_date = (datetime.now() - timedelta(days=15)).strftime('%d-%m-%Y')
         
-        # TCMB Veri Serileri: Brüt Rezerv ve Dolar Kuru
-        seriler = ['TP.AB.G02', 'TP.DK.USD.A.YTL']
-        df = evds.get_data(seriler, startdate=start_date, enddate=end_date)
+        # TP.AB.G02: Rezerv, TP.DK.USD.A.YTL: Dolar
+        df = evds.get_data(['TP.AB.G02', 'TP.DK.USD.A.YTL'], startdate=start_date, enddate=end_date)
+        df = df.ffill().dropna() # Hafta sonu boşluğunu doldur
         
-        # Veri temizliği
-        df = df.dropna().reset_index(drop=True)
-        
-        if df.empty:
-            return None
-
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
         
-        rezerv = latest['TP.AB.G02']
-        rezerv_fark = rezerv - prev['TP.AB.G02']
-        usd_kur = latest['TP.DK.USD.A.YTL']
-        
         return {
-            "rezerv": f"{round(rezerv/1000, 2)} Mlyr $",
-            "rezerv_degisim": f"{round(rezerv_fark/1000, 2)} Mlyr $",
-            "usd": f"{round(usd_kur, 4)} TL"
+            "rezerv": f"{round(latest['TP.AB.G02']/1000, 2)}B$",
+            "rezerv_degisim": latest['TP.AB.G02'] - prev['TP.AB.G02'],
+            "dolar_tcmb": round(latest['TP.DK.USD.A.YTL'], 4)
         }
-    except Exception as e:
-        print(f"EVDS Hatası: {e}")
+    except:
         return None
 
-# --- ANA EKRAN ---
-st.title("📊 FinansZone Grafik & Veri Paneli")
+# --- 2. TASARIM ARAÇLARI ---
+def get_safe_font(size):
+    try:
+        return ImageFont.truetype(FONT_PATH, size)
+    except:
+        return ImageFont.load_default()
 
-# Sidebar - API Anahtarı Kontrolü
-with st.sidebar:
-    st.header("Ayarlar")
-    evds_key = st.text_input("EVDS API Anahtarı", value="8nTja3zQFQ", type="password")
-    st.divider()
-    st.info("Uygulama başlatıldı. Veriler yükleniyor...")
+def draw_pagination(draw, active_step):
+    dot_radius = 8
+    spacing = 30
+    start_x = (W - (4 * spacing)) / 2
+    for i in range(5):
+        color = (38, 166, 154) if i == active_step else (100, 100, 100)
+        draw.ellipse([start_x + i*spacing, 1000, start_x + i*spacing + dot_radius*2, 1000 + dot_radius*2], fill=color)
 
-# Üst Bilgi Kartları (Metrics)
-col1, col2, col3 = st.columns(3)
+# --- 3. SAYFA OLUŞTURUCULAR (S5 VE EVDS ÖZEL) ---
 
-evds_data = get_evds_indicators(evds_key)
+def create_s3_evds(data, is_dark):
+    # EVDS Verileriyle Makro Bakış Sayfası
+    bg = (19, 23, 34) if is_dark else (255, 255, 255)
+    txt_c = (255, 255, 255) if is_dark else (0, 0, 0)
+    img = Image.new('RGB', (W, H), color=bg)
+    draw = ImageDraw.Draw(img)
+    
+    # Başlık
+    draw.text((80, 100), "MERKEZ BANKASI RAPORU", fill=(38, 166, 154), font=get_safe_font(60))
+    
+    # Rezerv Kutusu
+    draw.rounded_rectangle([80, 250, W-80, 500], radius=30, fill=(30, 36, 50) if is_dark else (240, 240, 240))
+    draw.text((120, 280), "TCMB Brüt Rezervleri", fill=(150, 150, 150), font=get_safe_font(40))
+    draw.text((120, 340), data['rezerv'], fill=(38, 166, 154), font=get_safe_font(100))
+    
+    # Yorum
+    msg = "Rezervlerdeki haftalık değişim piyasa\nlikiditesi açısından pozitif seyrediyor."
+    draw.multiline_text((80, 600), msg, fill=txt_c, font=get_safe_font(45), spacing=15)
+    
+    draw_pagination(draw, 2)
+    return img
 
-if evds_data:
-    col1.metric("TCMB Brüt Rezerv", evds_data["rezerv"], evds_data["rezerv_degisim"])
-    col2.metric("TCMB Dolar Kuru", evds_data["usd"])
+def create_s5_final(is_dark):
+    # Senin "kötü duruyor" dediğin logoyu düzelttiğimiz final sayfası
+    bg = (19, 23, 34) if is_dark else (255, 255, 255)
+    txt_c = (255, 255, 255) if is_dark else (0, 0, 0)
+    img = Image.new('RGB', (W, H), color=bg)
+    draw = ImageDraw.Draw(img)
+    
+    # 1. LOGO: Üstte ve şık
+    try:
+        logo = Image.open(LOGO_PATH).convert("RGBA")
+        logo.thumbnail((350, 350))
+        img.paste(logo, (int((W - logo.size[0]) / 2), 150), logo)
+    except: pass
+
+    # 2. MESAJ
+    draw.text((W/2, 500), "TAKİPTE KALIN", fill=(38, 166, 154), font=get_safe_font(70), anchor="mt")
+    draw.multiline_text((W/2, 600), "Analizlerimizi kaçırmamak için\nbizi takip etmeyi unutmayın.", 
+                        fill=txt_c, font=get_safe_font(45), align="center", anchor="mt")
+    
+    # 3. BUTON GÖRÜNÜMÜ
+    draw.rounded_rectangle([340, 750, 740, 840], radius=45, fill=(38, 166, 154))
+    draw.text((W/2, 770), "@finanszone", fill=(255, 255, 255), font=get_safe_font(40), anchor="mt")
+
+    draw_pagination(draw, 4)
+    return img
+
+# --- 4. STREAMLIT ARAYÜZÜ ---
+st.title("📱 FinansZone Carousel Botu")
+
+metrics = get_pro_metrics()
+
+if metrics:
+    st.success("TCMB (EVDS) Verileri Başarıyla Alındı")
+    col1, col2 = st.columns(2)
+    col1.metric("Brüt Rezerv", metrics['rezerv'])
+    col2.metric("TCMB Dolar", f"{metrics['dolar_tcmb']} TL")
 else:
-    col1.warning("Rezerv verisi şu an alınamadı.")
-    col2.info("Dolar (TCMB) bekleniyor...")
+    st.error("EVDS verileri şu an çekilemiyor, lütfen API Key'i kontrol edin.")
 
-# Yfinance ile Canlı Piyasa Verisi (Örnek: BIST 100)
-try:
-    bist = yf.Ticker("XU100.IS")
-    bist_last = bist.history(period="1d")['Close'].iloc[-1]
-    col3.metric("BIST 100", f"{round(bist_last, 2)}")
-except:
-    col3.error("Piyasa verisi alınamadı.")
+if st.button("🚀 Karuseli Oluştur"):
+    with st.spinner("Görseller Hazırlanıyor..."):
+        # S3 ve S5 örneklerini gösteriyoruz (Diğerleri de benzer mantıkla eklenebilir)
+        s3 = create_s3_evds(metrics, True)
+        s5 = create_s5_final(True)
+        
+        st.image([s3, s5], caption=["Slayt 3 (EVDS)", "Slayt 5 (Kapanış)"], width=400)
+        
+        # İndirme Butonu Örneği
+        buf = io.BytesIO()
+        s5.save(buf, format="PNG")
+        st.download_button("Son Slaytı İndir", buf.getvalue(), "kapanis.png", "image/png")
 
-st.divider()
-
-# --- GRAFİK OLUŞTURMA ALANI
+st.sidebar.caption("v2.1 - EVDS Entegreli")
