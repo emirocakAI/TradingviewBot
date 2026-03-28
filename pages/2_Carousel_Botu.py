@@ -9,7 +9,7 @@ import os
 FONT_PATH = "Outfit-VariableFont_wght.ttf"
 LOGO_PATH = "finanszone 1.png"
 
-# --- 2. VERİ ÇEKME ---
+# --- 2. VERİ VE AI MOTORU ---
 def get_market_data():
     symbols = {"BIST 100": "XU100.IS", "USD/TRY": "USDTRY=X", "Gram Altın": "GC=F", "BIST Banka": "XBANK.IS"}
     end_date = datetime.now()
@@ -19,155 +19,126 @@ def get_market_data():
         try:
             df = yf.download(ticker, start=start_date, end=end_date, progress=False)
             if len(df) >= 2:
-                # Kapanış ve Açılış değerleri ile haftalık % değişim
                 open_p = float(df['Open'].iloc[0])
                 close_p = float(df['Close'].iloc[-1])
                 change = ((close_p - open_p) / open_p) * 100
                 results[name] = f"{'+' if change > 0 else ''}{round(change, 2)}%"
-            else:
-                results[name] = "N/A"
-        except:
-            results[name] = "Hata"
+            else: results[name] = "N/A"
+        except: results[name] = "Hata"
     return results
 
-# --- 3. AI MANŞET MOTORU (Dinamik Analiz) ---
 def generate_ai_headline(data):
     try:
         bist_change = float(data.get("BIST 100", "0%").replace("%", ""))
-        usd_change = float(data.get("USD/TRY", "0%").replace("%", ""))
-        
-        # BIST analizi
-        if bist_change > 1.5:
-            bist_status = "BIST-100 haftayı güçlü bir yükselişle kapattı."
-        elif bist_change < -1.5:
-            bist_status = "Borsada bu hafta satış baskısı hakimdi."
-        else:
-            bist_status = "Piyasalarda bu hafta yatay bir seyir izlendi."
-            
-        # Döviz analizi
-        if usd_change > 0.5:
-            curr_status = "Döviz kurlarında yukarı yönlü hareket hızlandı."
-        else:
-            curr_status = "Küresel piyasalarda veri akışı takibimizdeydi."
-            
-        return f"{bist_status}\n{curr_status}"
-    except:
-        return "Haftalık piyasa verileri ve kritik\ngelişmeler analiz edildi."
+        bist_status = "BIST-100 haftayı yükselişle kapattı." if bist_change > 0 else "Borsada bu hafta kar satışları görüldü."
+        return f"{bist_status}\nPiyasalarda veri trafiği yoğundu."
+    except: return "Haftalık piyasa analizi ve\nkritik veriler hazırlandı."
 
-# --- 4. KAPAK TASARIMI (Hizalamalar ve Tarih Düzeltildi) ---
+# --- 3. MANUEL BONCUK ÇİZİCİ (Çarpı Hatasına Son) ---
+def draw_pagination_dots(draw, current_page, total_pages, w, h, accent_color):
+    dot_radius = 8
+    spacing = 30
+    total_width = (total_pages - 1) * spacing
+    start_x = (w - total_width) / 2
+    y = h - 100
+    
+    for i in range(total_pages):
+        x = start_x + (i * spacing)
+        if i == current_page:
+            # Dolu Daire
+            draw.ellipse([x - dot_radius, y - dot_radius, x + dot_radius, y + dot_radius], fill=accent_color)
+        else:
+            # Boş Daire (Çerçeve)
+            draw.ellipse([x - dot_radius, y - dot_radius, x + dot_radius, y + dot_radius], outline=accent_color, width=2)
+
+# --- 4. KAPAK TASARIMI (Daraltılmış Metinler) ---
 def create_cover_slide(date_range, headline, is_dark=True):
-    # 1080x1080 Kare Format
     w, h = 1080, 1080
     bg_color = (19, 23, 34) if is_dark else (255, 255, 255)
-    # Rakamlar black (siyah) olarak istendi, bu yüzden txt_color her zaman siyah olacak
-    txt_color = (0, 0, 0) if not is_dark else (255, 255, 255) # Temaya göre genel metin rengi
-    # Değerlerin rengi kaldırıldı, sadece tek bir txt_color (black/white) kullanılacak.
-
-    accent_color = (38, 166, 154) # Vurgu rengi
+    txt_color = (255, 255, 255) if is_dark else (0, 0, 0)
+    accent_color = (38, 166, 154)
     
     img = Image.new('RGB', (w, h), color=bg_color)
     draw = ImageDraw.Draw(img)
     
-    # Fontlar
-    f_title = ImageFont.truetype(FONT_PATH, 100)
+    # Font boyutları sığması için küçültüldü
+    f_title = ImageFont.truetype(FONT_PATH, 80) # 100 -> 80 yapıldı (Taşmayı önlemek için)
     f_date = ImageFont.truetype(FONT_PATH, 42)
-    f_headline = ImageFont.truetype(FONT_PATH, 55)
-    f_dots = ImageFont.truetype(FONT_PATH, 50) # Boncuk fontu
+    f_headline = ImageFont.truetype(FONT_PATH, 50)
 
-    # 1. LOGO (Tam Merkezi)
+    # Logo
     try:
         logo = Image.open(LOGO_PATH).convert("RGBA")
-        logo_w = 400
+        logo_w = 350
         logo_h = int(logo.size[1] * (logo_w / logo.size[0]))
         logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
-        # Logoyu tam merkeze yapıştır (x: (w-lw)/2, y: 120)
-        img.paste(logo, (int((w - logo_w) / 2), 120), logo)
-        start_y = 120 + logo_h + 80
-    except:
-        start_y = 300
+        img.paste(logo, (int((w - logo_w) / 2), 150), logo)
+        start_y = 150 + logo_h + 80
+    except: start_y = 400
 
-    # 2. BAŞLIK (Tam Merkezi Hizalama)
+    # Başlık (Tam Ortalanmış)
     title_text = "HAFTALIK PİYASA KARNESİ"
-    # bbox hesabı ile metni tam ortala
     t_bbox = draw.textbbox((0, 0), title_text, font=f_title)
     draw.text(((w - (t_bbox[2]-t_bbox[0]))/2, start_y), title_text, fill=txt_color, font=f_title)
     
-    # 3. TARİH (Tam Merkezi, Format Düzeltildi: 28.03.2026)
-    # Tarih formatı 28.03.2026 olarak st.text_input'dan geliyor.
+    # Tarih (Tam Ortalanmış)
     date_text = f"Tarih: {date_range}"
     d_bbox = draw.textbbox((0, 0), date_text, font=f_date)
-    draw.text(((w - (d_bbox[2]-d_bbox[0]))/2, start_y + 120), date_text, fill=(130, 130, 130), font=f_date)
+    draw.text(((w - (d_bbox[2]-d_bbox[0]))/2, start_y + 100), date_text, fill=(130, 130, 130), font=f_date)
 
-    # 4. MANŞET (Sol Kenara Yaslı, Şık Kutu İçinde)
-    # Manşet Alanı - Alt Kısım
-    margin = 80
-    draw.rectangle([margin, 700, margin + 250, 712], fill=accent_color) # Yeşil ayraç
-    # align="left" ve spacing=15 ile sola yaslı manşet
+    # Manşet Alanı (Daha içeriden - margin arttırıldı)
+    margin = 120
+    draw.rectangle([margin, 700, margin + 250, 710], fill=accent_color)
     draw.multiline_text((margin, 740), headline, fill=txt_color, font=f_headline, spacing=15, align="left")
     
-    # 5. BONCUKLAR (Tam Merkezi, Sembol Düzeltildi)
-    # Hata: unicode karakter hatası. Yaygın desteklenen • ve ◦ sembolleri kullanıldı.
-    dots_text = "• ◦ ◦ ◦ ◦" # Sayfa 1: Kapak
-    dots_bbox = draw.textbbox((0, 0), dots_text, font=f_dots)
-    # Alttaki konumu düzeltildi (h - 100).
-    draw.text(((w - (dots_bbox[2]-dots_bbox[0]))/2, h - 100), dots_text, fill=accent_color, font=f_dots)
+    # Boncuklar (Çizim Fonksiyonu ile)
+    draw_pagination_dots(draw, 0, 5, w, h, accent_color)
     
-    # Benzersiz dosya adı
-    path = f"cover_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    path = f"cover_{datetime.now().strftime('%H%M%S')}.png"
     img.save(path)
     return path
 
-# --- 5. SLAYT 2: PİYASA VERİLERİ (Rakamlar Black/White Olarak Güncellendi) ---
+# --- 5. SLAYT 2: VERİLER (Renkli ve Bold) ---
 def create_data_slide(market_data, is_dark=True):
     w, h = 1080, 1080
     bg_color = (19, 23, 34) if is_dark else (255, 255, 255)
-    # Rakamlar black (siyah) olarak istendi, bu yüzden txt_color her zaman siyah olacak
-    # Aydınlık temada metin siyah, karanlık temada beyaz olacak.
-    txt_color = (0, 0, 0) if not is_dark else (255, 255, 255)
-    
-    # Kart arka planı daha belirginleştirildi
+    txt_color = (255, 255, 255) if is_dark else (0, 0, 0)
     card_bg = (30, 36, 50) if is_dark else (240, 242, 246)
-    accent_color = (38, 166, 154) # Vurgu rengi
+    up_color = (38, 166, 154) # Yeşil
+    down_color = (255, 82, 82) # Kırmızı
     
     img = Image.new('RGB', (w, h), color=bg_color)
     draw = ImageDraw.Draw(img)
-    f_header, f_label, f_value, f_dots = ImageFont.truetype(FONT_PATH, 75), ImageFont.truetype(FONT_PATH, 48), ImageFont.truetype(FONT_PATH, 65), ImageFont.truetype(FONT_PATH, 50)
-
-    # 1. Başlık (Tam Merkezi)
-    header_text = "PİYASA PERFORMANSI"
-    header_bbox = draw.textbbox((0, 0), header_text, font=f_header)
-    draw.text(((w - (header_bbox[2]-header_bbox[0]))/2, 80), header_text, fill=txt_color, font=f_header)
-    # Alt çizgi vurgusu
-    draw.rectangle([80, 175, 300, 185], fill=accent_color)
-
-    # 2. Veri Kartlarını Oluştur
-    start_y, card_h, spacing = 250, 160, 30
-    # market_data Örn: {'BIST 100': '-1.21%', 'USD/TRY': '+0.35%', ...}
     
+    # Değerler için Bold etkisi yaratmak adına fontu büyük tutuyoruz
+    f_header = ImageFont.truetype(FONT_PATH, 70)
+    f_label = ImageFont.truetype(FONT_PATH, 48)
+    f_value_bold = ImageFont.truetype(FONT_PATH, 70) # Bold değerler için büyük font
+
+    # Başlık
+    draw.text((80, 80), "PİYASA PERFORMANSI", fill=txt_color, font=f_header)
+    draw.rectangle([80, 170, 300, 180], fill=up_color)
+
+    # Kartlar
+    start_y, card_h, spacing = 250, 160, 35
     for i, (label, value) in enumerate(market_data.items()):
         curr_y = start_y + (i * (card_h + spacing))
-        
-        # Kart Arka Planı (Yuvarlatılmış Köşeli)
         draw.rounded_rectangle([80, curr_y, w - 80, curr_y + card_h], radius=20, fill=card_bg)
+        draw.text((120, curr_y + 50), label, fill=(180, 180, 180), font=f_label)
         
-        # Etiket (Sol Taraf)
-        draw.text((130, curr_y + 50), label, fill=(180, 180, 180), font=f_label)
+        # Renk Kontrolü Geri Geldi
+        is_up = "+" in value
+        v_color = up_color if is_up else down_color
         
-        # Değer (Sağ Taraf, Renk Kaldırıldı, Siyah/Beyaz)
-        # Değeri sağa yaslamak için bbox hesabı
-        v_bbox = draw.textbbox((0, 0), value, font=f_value)
+        # Değer Yazımı (Sağa yaslı ve Büyük/Bold hissi)
+        v_bbox = draw.textbbox((0, 0), value, font=f_value_bold)
         v_w = v_bbox[2] - v_bbox[0]
-        # Renk kontrolü (accent_color/loss_color) kaldırıldı, tüm metin ve değerler tek bir txt_color (black/white) ile yazıldı.
-        draw.text((w - v_w - 130, curr_y + 42), value, fill=txt_color, font=f_value)
+        draw.text((w - v_w - 120, curr_y + 40), value, fill=v_color, font=f_value_bold)
 
-    # 3. BONCUKLAR (Sayfa 2: ○ ● ○ ○ ○ -> Düzeltildi)
-    # Sayfa 2: ○ ● ○ ○ ○ -> Düzeltildi (Standard Unicode • and ◦ used for compatibility)
-    dots_text = "◦ • ◦ ◦ ◦" # Sayfa 2
-    dots_bbox = draw.textbbox((0, 0), dots_text, font=f_dots)
-    # Alttaki konumu düzeltildi (h - 100).
-    draw.text(((w - (dots_bbox[2]-dots_bbox[0]))/2, h - 100), dots_text, fill=accent_color, font=f_dots)
+    # Boncuklar (Çizim Fonksiyonu ile - Sayfa 2)
+    draw_pagination_dots(draw, 1, 5, w, h, up_color)
     
-    path = f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    path = f"data_{datetime.now().strftime('%H%M%S')}.png"
     img.save(path)
     return path
 
@@ -175,61 +146,34 @@ def create_data_slide(market_data, is_dark=True):
 st.set_page_config(page_title="FinansZone Carousel", layout="wide")
 if "carousel_history" not in st.session_state: st.session_state.carousel_history = []
 
-col_logo, col_title = st.columns([1, 6])
-with col_logo:
-    try: st.image(LOGO_PATH, width=100)
-    except: pass
-with col_title:
-    st.title("Carousel Oluşturucu")
+st.title("🎠 FinansZone Carousel Botu")
 
 with st.sidebar:
-    st.header("⚙️ Kontrol Paneli")
-    # Tarih formatı 28.03.2026 olarak güncellendi (strftime ile)
+    st.header("⚙️ Ayarlar")
     date_input = st.text_input("Tarih Aralığı", value=datetime.now().strftime("%d.%m.%Y"))
-    st.info("Manşet, verilere göre otomatik oluşturulacaktır.")
     theme = st.radio("Tema", ["Karanlık", "Aydınlık"])
-    if st.button("🗑️ Geçmişi Temizle"):
+    if st.button("🗑️ Temizle"):
         st.session_state.carousel_history = []
         st.rerun()
 
 if st.button("🚀 Carousel Paketini Hazırla"):
-    with st.spinner("Piyasa taranıyor ve analiz ediliyor..."):
-        # 1. Verileri Çek
+    with st.spinner("Analiz ediliyor..."):
         data = get_market_data()
+        headline = generate_ai_headline(data)
         
-        # 2. AI Manşeti oluştur
-        auto_headline = generate_ai_headline(data)
+        s1 = create_cover_slide(date_input, headline, theme == "Karanlık")
+        s2 = create_data_slide(data, theme == "Karanlık")
         
-        # 3. Slayt 1 (Kapak) ve Slayt 2 (Data) oluştur
-        slide1_path = create_cover_slide(date_input, auto_headline, theme == "Karanlık")
-        slide2_path = create_data_slide(data, theme == "Karanlık")
-        
-        # Hafızaya kaydet (Sohbet Akışı için)
-        st.session_state.carousel_history.insert(0, {
-            "pages": [slide1_path, slide2_path],
-            "date": date_input,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
+        st.session_state.carousel_history.insert(0, {"pages": [s1, s2], "date": date_input})
         st.rerun()
 
-# --- GÖSTERİM DÖNGÜSÜ ---
-st.divider()
 for entry in st.session_state.carousel_history:
     with st.container():
-        # Başlık ve Tarih (Streamlit UI'da)
-        st.subheader(f"📊 {entry['date']} Karnesi ({entry['timestamp']})")
-        
-        # Carousel Boncukları ve Aktif Sayfa Bilgisi (Streamlit UI'da)
-        # i=0 ise en son oluşturulan, i=1 ise bir önceki
-        # Bu bilgi görselin içinde zaten var (Boncuk 1 aktif), burada sadece UI'da teyit ediyoruz.
-        # i=0 Kapak (Slide 1), i=1 Data (Slide 2)
-        st.caption(f"Carousel Sayfa {1 if entry['pages'][0] == entry['pages'][0] else 2} / 5 (Kapak)")
-        
-        cols = st.columns(len(entry['pages']))
+        st.subheader(f"📊 {entry['date']} Karnesi")
+        cols = st.columns(2)
         for i, p_path in enumerate(entry['pages']):
             with cols[i]:
-                # Görseli göster ve indirme butonu koy
-                st.image(p_path, use_container_width=True, caption=f"Sayfa {i+1}")
+                st.image(p_path, use_container_width=True)
                 with open(p_path, "rb") as f:
-                    st.download_button(f"📥 Sayfa {i+1} İndir", f, f"Slayt_{i+1}.png", key=p_path)
+                    st.download_button(f"📥 Sayfa {i+1}", f, f"Slayt_{i+1}.png", key=p_path)
         st.divider()
