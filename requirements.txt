@@ -3,3 +3,4 @@ playwright
 Pillow
 yfinance
 pandas
+evds
