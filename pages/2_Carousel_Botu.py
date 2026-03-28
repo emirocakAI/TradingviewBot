@@ -1,151 +1,85 @@
 import streamlit as st
-import yfinance as yf
+import pandas as pd
+from evds import evdsAPI
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 
-# --- 1. AYARLAR ---
+# --- 1. AYARLAR & API ---
+EVDS_KEY = "8nTja3zQFQ" # Paylaştığın anahtar eklendi
+evds = evdsAPI(EVDS_KEY)
 FONT_PATH = "Outfit-VariableFont_wght.ttf"
 LOGO_PATH = "finanszone 1.png"
 W, H = 1080, 1080
-ACCENT_COLOR = (38, 166, 154) # Yeşil
-DOWN_COLOR = (255, 82, 82)    # Kırmızı
 
-# --- 2. YARDIMCI FONKSİYONLAR ---
-def get_safe_font(size):
-    try: return ImageFont.truetype(FONT_PATH, size)
-    except: return ImageFont.load_default()
-
-def draw_pagination_dots(draw, current_page, total_pages=5):
-    dot_radius = 7
-    spacing = 30
-    total_width = (total_pages - 1) * spacing
-    start_x = (W - total_width) / 2
-    y = H - 50 
-    for i in range(total_pages):
-        x = start_x + (i * spacing)
-        if i == current_page:
-            draw.ellipse([x-dot_radius, y-dot_radius, x+dot_radius, y+dot_radius], fill=ACCENT_COLOR)
-        else:
-            draw.ellipse([x-dot_radius, y-dot_radius, x+dot_radius, y+dot_radius], outline=ACCENT_COLOR, width=2)
-
-def create_base_slide(is_dark):
-    bg = (19, 23, 34) if is_dark else (255, 255, 255)
-    img = Image.new('RGB', (W, H), color=bg)
-    return img, ImageDraw.Draw(img), (255, 255, 255) if is_dark else (0, 0, 0)
-
-# --- 3. SAYFA OLUŞTURUCULAR ---
-
-# S1: KAPAK
-def create_s1(date_range, headline, is_dark):
-    img, draw, txt_c = create_base_slide(is_dark)
+# --- 2. EVDS VERİ ÇEKME FONKSİYONU ---
+def get_evds_data():
     try:
-        logo = Image.open(LOGO_PATH).convert("RGBA").resize((350, 100), Image.LANCZOS)
-        img.paste(logo, (int((W-350)/2), 150), logo)
-    except: pass
-    
-    draw.text(((W-draw.textbbox((0,0),"HAFTALIK PİYASA KARNESİ",font=get_safe_font(80))[2])/2, 350), "HAFTALIK PİYASA KARNESİ", fill=txt_c, font=get_safe_font(80))
-    draw.text(((W-draw.textbbox((0,0),f"Tarih: {date_range}",font=get_safe_font(40))[2])/2, 450), f"Tarih: {date_range}", fill=(130,130,130), font=get_safe_font(40))
-    
-    draw.rectangle([120, 700, 370, 710], fill=ACCENT_COLOR)
-    draw.multiline_text((120, 740), headline, fill=txt_c, font=get_safe_font(50), spacing=15)
-    draw_pagination_dots(draw, 0)
-    return img
+        end_date = datetime.now().strftime('%d-%m-%Y')
+        start_date = (datetime.now() - timedelta(days=15)).strftime('%d-%m-%Y')
+        
+        # TP.AB.G02: TCMB Brüt Döviz Rezervleri (Milyon Dolar)
+        # TP.DK.USD.A.YTL: ABD Doları (Döviz Alış)
+        df = evds.get_data(['TP.AB.G02', 'TP.DK.USD.A.YTL'], startdate=start_date, enddate=end_date)
+        
+        # Son iki geçerli veriyi kıyasla (Haftalık değişim için)
+        df = df.dropna()
+        latest = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        rezerv_degisim = latest['TP.AB.G02'] - prev['TP.AB.G02']
+        usd_degisim = ((latest['TP.DK.USD.A.YTL'] - prev['TP.DK.USD.A.YTL']) / prev['TP.DK.USD.A.YTL']) * 100
+        
+        return {
+            "TCMB Rezerv": f"{'+' if rezerv_degisim > 0 else ''}{round(rezerv_degisim/1000, 2)} Mlyr $",
+            "Dolar/TL (TCMB)": f"{'+' if usd_degisim > 0 else ''}{round(usd_degisim, 2)}%",
+            "Rezerv Durumu": latest['TP.AB.G02']
+        }
+    except Exception as e:
+        return {"Hata": "Veri Çekilemedi", "Detay": str(e)}
 
-# S2: PİYASA VERİLERİ
-def create_s2(data, is_dark):
-    img, draw, txt_c = create_base_slide(is_dark)
-    draw.text((80, 80), "PİYASA PERFORMANSI", fill=txt_c, font=get_safe_font(70))
-    draw.rectangle([80, 170, 300, 180], fill=ACCENT_COLOR)
-    
-    y = 220
-    for label, val in data.items():
-        draw.rounded_rectangle([80, y, W-80, y+150], radius=20, fill=(30,36,50) if is_dark else (240,242,246))
-        draw.text((120, y+45), label, fill=(180,180,180), font=get_safe_font(45))
-        c = ACCENT_COLOR if "+" in val else DOWN_COLOR
-        v_w = draw.textbbox((0,0), val, font=get_safe_font(65))[2]
-        draw.text((W-v_w-120, y+35), val, fill=c, font=get_safe_font(65))
-        y += 180
-    draw_pagination_dots(draw, 1)
-    return img
+# --- 3. DİNAMİK VERİ SAYFASI (S3 - EVDS ÖZEL) ---
+def create_evds_slide(data, is_dark):
+    bg_color = (19, 23, 34) if is_dark else (255, 255, 255)
+    img = Image.new('RGB', (W, H), color=bg_color)
+    draw = ImageDraw.Draw(img)
+    txt_c = (255, 255, 255) if is_dark else (0, 0, 0)
+    accent = (38, 166, 154)
 
-# S3: HAFTANIN ENLERİ (AI Çıkarımı)
-def create_s3(is_dark):
-    img, draw, txt_c = create_base_slide(is_dark)
-    draw.text((80, 80), "HAFTANIN ENLERİ", fill=txt_c, font=get_safe_font(70))
-    draw.rectangle([80, 170, 300, 180], fill=ACCENT_COLOR)
-    
-    items = [("En Çok Yükselen", "BIST Banka", "+%4.2"), ("En Çok Düşen", "Havacılık", "-%2.1"), ("Haftanın Yıldızı", "Gram Altın", "Rekor")]
+    # Başlık
+    draw.text((80, 80), "MERKEZ BANKASI ANALİZİ", fill=txt_c, font=ImageFont.truetype(FONT_PATH, 70))
+    draw.rectangle([80, 170, 350, 180], fill=accent)
+
+    # Veri Kutuları
     y = 250
-    for tit, name, val in items:
-        draw.text((80, y), tit, fill=ACCENT_COLOR, font=get_safe_font(40))
-        draw.text((80, y+50), name, fill=txt_c, font=get_safe_font(60))
-        draw.text((W-250, y+50), val, fill=txt_c, font=get_safe_font(55))
-        draw.line([80, y+130, W-80, y+130], fill=(60,60,60), width=2)
-        y += 200
-    draw_pagination_dots(draw, 2)
+    # Rezerv Göstergesi
+    draw.rounded_rectangle([80, y, W-80, y+200], radius=25, fill=(30, 36, 50) if is_dark else (240, 242, 246))
+    draw.text((120, y+40), "Haftalık Rezerv Değişimi", fill=(150, 150, 150), font=ImageFont.truetype(FONT_PATH, 40))
+    val = data.get("TCMB Rezerv", "Veri Yok")
+    c = accent if "+" in val else (255, 82, 82)
+    draw.text((120, y+90), val, fill=c, font=ImageFont.truetype(FONT_PATH, 80))
+    
+    # Alt Mesaj (AI Yorumu gibi)
+    y += 250
+    note = "Merkez Bankası brüt rezervleri piyasa likiditesi\naçısından kritik eşikte seyrediyor."
+    draw.multiline_text((80, y), note, fill=txt_c, font=ImageFont.truetype(FONT_PATH, 45), spacing=15)
+
+    # Baloncuk (3. sayfa)
+    # (Önceki draw_pagination_dots fonksiyonunu buraya entegre edebilirsin)
     return img
 
-# S4: KRİTİK EŞİKLER
-def create_s4(is_dark):
-    img, draw, txt_c = create_base_slide(is_dark)
-    draw.text((80, 80), "KRİTİK EŞİKLER", fill=txt_c, font=get_safe_font(70))
-    draw.rectangle([80, 170, 300, 180], fill=ACCENT_COLOR)
-    
-    levels = [("BIST 100", "9.200", "9.800"), ("Dolar/TL", "32.10", "33.50"), ("Ons Altın", "2.150", "2.300")]
-    y = 280
-    draw.text((450, 220), "DESTEK", fill=(130,130,130), font=get_safe_font(35))
-    draw.text((750, 220), "DİRENÇ", fill=(130,130,130), font=get_safe_font(35))
-    
-    for inst, sup, res in levels:
-        draw.text((80, y), inst, fill=txt_c, font=get_safe_font(50))
-        draw.text((450, y), sup, fill=DOWN_COLOR, font=get_safe_font(50))
-        draw.text((750, y), res, fill=ACCENT_COLOR, font=get_safe_font(50))
-        y += 120
-    draw_pagination_dots(draw, 3)
-    return img
+# --- 4. STREAMLIT ARAYÜZÜ ---
+st.title("🛡️ FinansZone Pro: Haftalık Piyasa Karnesi")
 
-# S5: KAPANIŞ
-def create_s5(is_dark):
-    img, draw, txt_c = create_base_slide(is_dark)
-    try:
-        logo = Image.open(LOGO_PATH).convert("RGBA").resize((450, 130), Image.LANCZOS)
-        img.paste(logo, (int((W-450)/2), 300), logo)
-    except: pass
-    
-    msg = "Piyasa nabzını tutmak için\nbizi takipte kalın."
-    m_w = draw.textbbox((0,0), "Piyasa nabzını tutmak için", font=get_safe_font(55))[2]
-    draw.multiline_text(((W-m_w)/2, 500), msg, fill=txt_c, font=get_safe_font(55), align="center", spacing=20)
-    
-    draw.rounded_rectangle([340, 700, 740, 800], radius=50, fill=ACCENT_COLOR)
-    draw.text((415, 725), "@finanszone", fill=(255,255,255), font=get_safe_font(45))
-    draw_pagination_dots(draw, 4)
-    return img
-
-# --- 4. STREAMLIT ANA AKIŞ ---
-st.set_page_config(page_title="FinansZone Mega Carousel", layout="wide")
-st.title("🚀 FinansZone 5'li Karusel Paketi")
-
-with st.sidebar:
-    date_val = st.text_input("Tarih", datetime.now().strftime("%d.%m.%Y"))
-    dark_mode = st.toggle("Karanlık Tema", True)
-
-if st.button("🔥 Tüm Karuseli Oluştur"):
-    data = {"BIST 100": "+1.24%", "USD/TRY": "+0.45%", "Gram Altın": "+2.10%", "BIST Banka": "-1.15%"} # Örnek
-    headline = "Borsada Rekor Seviyeler Test Edildi.\nKüresel Piyasalarda Gözler Fed'de."
-    
-    slides = [
-        create_s1(date_val, headline, dark_mode),
-        create_s2(data, dark_mode),
-        create_s3(dark_mode),
-        create_s4(dark_mode),
-        create_s5(dark_mode)
-    ]
-    
-    cols = st.columns(5)
-    for i, s_img in enumerate(slides):
-        path = f"slide_{i+1}.png"
-        s_img.save(path)
-        with cols[i]:
-            st.image(path, caption=f"Sayfa {i+1}")
-            with open(path, "rb") as f:
-                st.download_button(f"S{i+1} İndir", f, file_name=path)
+if st.button("📈 Profesyonel Verileri Getir"):
+    with st.spinner("TCMB Veritabanına bağlanılıyor..."):
+        evds_results = get_evds_data()
+        
+        if "Hata" in evds_results:
+            st.error(f"EVDS Hatası: {evds_results['Detay']}")
+        else:
+            st.success("TCMB Verileri Başarıyla Çekildi!")
+            st.json(evds_results) # Kontrol için ekranda göster
+            
+            # Slaytı Oluştur
+            pro_slide = create_evds_slide(evds_results, True)
+            st.image(pro_slide, caption="TCMB Veri Slaytı", use_container_width=True)
